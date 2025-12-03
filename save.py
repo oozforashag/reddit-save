@@ -6,11 +6,14 @@ import re
 from tqdm import tqdm
 from utilities import *
 
+
 # Get arguments
 def validate_mode(mode):
     if mode not in ["saved", "upvoted"] and not mode.startswith("user:"):
         raise argparse.ArgumentTypeError(f"Invalid mode: {mode}")
     return mode
+
+
 parser = argparse.ArgumentParser(description="Save reddit posts to file.")
 parser.add_argument("mode", type=validate_mode, nargs=1, help="The file to convert.")
 if os.getenv("DOCKER", "0") != "1":
@@ -91,8 +94,8 @@ if page_size:
     length = max(len(posts_html), len(comments_html))
     page_count = (length // page_size) + 1
     for i in range(page_count):
-        posts_on_page = posts_html[i*page_size:(i+1)*page_size]
-        comments_on_page = comments_html[i*page_size:(i+1)*page_size]
+        posts_on_page = posts_html[i * page_size:(i + 1) * page_size]
+        comments_on_page = comments_html[i * page_size:(i + 1) * page_size]
         has_next = i < page_count - 1
         save_html(posts_on_page, comments_on_page, location, html_file, i, has_next, username=html_file.split(".")[0])
 save_html(posts_html, comments_html, location, html_file, None, False, username=html_file.split(".")[0])

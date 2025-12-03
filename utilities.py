@@ -208,7 +208,7 @@ def save_media(post, location):
         except:
             os.chdir(current)
             return None
-    
+
     # Is this an imgur image?
     if domain == "imgur.com" and extension != "gifv":
         for extension in IMAGE_EXTENSIONS:
@@ -217,7 +217,8 @@ def save_media(post, location):
             direct_url = direct_url.replace("m.imgur.com", "imgur.com")
             try:
                 response = requests.get(direct_url)
-            except: continue
+            except:
+                continue
             if response.status_code == 200:
                 filename = f"{readable_name}_{post.id}.{extension}"
                 with open(os.path.join(location, "media", filename), "wb") as f:
@@ -333,11 +334,11 @@ def save_html(posts, comments, location, html_file, page, has_next, username=Non
     if page == 0 or page is None:
         html = html.replace("Previous</a>", "</a>")
     else:
-        html = html.replace(".p.html", f".{page-1}.html")
+        html = html.replace(".p.html", f".{page - 1}.html")
     if not has_next or page is None:
         html = html.replace("Next</a>", "</a>")
     else:
-        html = html.replace(".n.html", f".{page+1}.html")
+        html = html.replace(".n.html", f".{page + 1}.html")
     html = html.replace("<!--posts-->", "\n".join(posts))
     html = html.replace("<!--comments-->", "\n".join(comments))
     file_name = html_file if page is None else html_file.replace(".html", f".{page}.html")
