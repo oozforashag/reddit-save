@@ -44,13 +44,15 @@ def get_previous(location, html_file):
     existing_ids = []
     existing_posts_html = []
     existing_comments_html = []
-    if html_file in html_files: matches.append(html_file)
+    if html_file in html_files:
+        matches.append(html_file)
+
     for match in matches:
         with open(os.path.join(location, match), encoding="utf-8") as f:
             current_html = f.read()
-            for id in re.findall(r'id="(.+?)"', current_html):
-                if id not in existing_ids:
-                    existing_ids.append(id)
+            for post_id in re.findall(r'id="(.+?)"', current_html):
+                if post_id not in existing_ids:
+                    existing_ids.append(post_id)
             posts = re.findall(
                 r'(<div class="post"[\S\n\t\v ]+?<!--postend--><\/div>)',
                 current_html
@@ -177,7 +179,8 @@ def save_media(post, location):
         data = resp.json()
         post_data = data[0]["data"]["children"][0]["data"]
         media = post_data.get("media_metadata")
-        if not media: return None
+        if not media:
+            return None
         filenames = []
         for idx, data in enumerate(list(media.values()), 1):
             if "m" not in data: continue
@@ -192,7 +195,7 @@ def save_media(post, location):
                 with open(os.path.join(location, "media", filename), "wb") as f:
                     f.write(response.content)
                     filenames.append(filename)
-        return filenames[0] if filenames else None
+        return filenames if filenames else None
 
     # Is this a v.redd.it link?
     if domain == "redd.it":
@@ -234,6 +237,7 @@ def save_media(post, location):
                 location, "media", f"{readable_name}_{post.id}" + ".%(ext)s"
             )
         }
+        current = os.getcwd()
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
                 ydl.download([url])
@@ -248,20 +252,32 @@ def save_media(post, location):
 def add_media_preview_to_html(post_html, media):
     """Takes post HTML and returns a modified version with the preview
     inserted."""
+    if len(media) == 1:
+        media = media[0]
+        extension = media.split(".")[-1]
+        location = "/".join(["media", media])
+        if extension in IMAGE_EXTENSIONS:
+            return post_html.replace(
+                "<!--preview-->",
+                f'<img src="{location}">'
+            )
+        if extension in VIDEO_EXTENSIONS:
+            return post_html.replace(
+                "<!--preview-->",
+                f'<video controls><source src="{location}"></video>'
+            )
+    else:
+        gallery = ""
+        for i, media_file in enumerate(media):
+            extension = media_file.split(".")[-1]
+            location = "/".join(["media", media_file])
+            if extension in IMAGE_EXTENSIONS:
+                gallery += f'<figure><img src="{location}"><figcaption>Image {i + 1} of {len(media)}</figcaption></figure><br/><br/>'
+            elif extension in VIDEO_EXTENSIONS:
+                gallery +=f'<video controls><source src="{location}"></video><br/>{i + 1} of {len(media)}<br/><br/>'
+        post_html = post_html.replace("<!--preview-->",gallery)
+        return post_html
 
-    extension = media.split(".")[-1]
-    location = "/".join(["media", media])
-    if extension in IMAGE_EXTENSIONS:
-        return post_html.replace(
-            "<!--preview-->",
-            f'<img src="{location}">'
-        )
-    if extension in VIDEO_EXTENSIONS:
-        return post_html.replace(
-            "<!--preview-->",
-            f'<video controls><source src="{location}"></video>'
-        )
-    return post_html
 
 
 def create_post_page_html(post, post_html):
