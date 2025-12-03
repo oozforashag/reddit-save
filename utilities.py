@@ -208,17 +208,7 @@ def save_media(post, location):
         except:
             os.chdir(current)
             return None
-
-    # Is it a gfycat link that redirects? Update the URL if possible
-    if domain == "gfycat.com":
-        html = requests.get(post.url).content
-        if len(html) < 50000:
-            match = re.search(r"http([\dA-Za-z\+\:\/\.]+)\.mp4", html.decode())
-            if match:
-                url = match.group()
-            else:
-                return None
-
+    
     # Is this an imgur image?
     if domain == "imgur.com" and extension != "gifv":
         for extension in IMAGE_EXTENSIONS:
