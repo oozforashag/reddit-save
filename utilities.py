@@ -5,7 +5,7 @@ import requests
 from redvid import Downloader
 import yt_dlp
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from logindata import REDDIT_USERNAME, REDDIT_PASSWORD
@@ -117,7 +117,7 @@ def get_post_html(post):
 
     with open(os.path.join("html", "post-div.html"), encoding="utf-8") as f:
         html = f.read()
-    dt = datetime.utcfromtimestamp(post.created_utc)
+    dt = datetime.fromtimestamp(post.created_utc, timezone.utc)
     html = html.replace("<!--title-->", post.title)
     html = html.replace("<!--subreddit-->", f"/r/{str(post.subreddit)}")
     html = html.replace("<!--user-->", f"/u/{post.author.name}" if post.author else "[deleted]")
@@ -296,7 +296,7 @@ def get_comment_html(comment, children=True, op=None):
 
     with open(os.path.join("html", "comment-div.html"), encoding="utf-8") as f:
         html = f.read()
-    dt = datetime.utcfromtimestamp(comment.created_utc)
+    dt = datetime.fromtimestamp(comment.created_utc, timezone.utc)
     author = "[deleted]"
     if comment.author:
         if comment.author == op:
