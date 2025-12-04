@@ -6,6 +6,9 @@ from redvid import Downloader
 import yt_dlp
 import re
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from logindata import REDDIT_USERNAME, REDDIT_PASSWORD
@@ -18,13 +21,13 @@ except ImportError:
 
 IMAGE_EXTENSIONS = ["gif", "gifv", "jpg", "jpeg", "png"]
 VIDEO_EXTENSIONS = ["mp4"]
-PLATFORMS = ["redgifs.com", "gfycat.com", "imgur.com", "youtube.com"]
+PLATFORMS = ["redgifs.com", "imgur.com", "youtube.com"]
 
 
 def make_client():
     """Creates a PRAW client with the details in the secrets.py file."""
 
-    print(REDDIT_USERNAME)
+    logger.info(REDDIT_USERNAME)
 
     return praw.Reddit(
         username=REDDIT_USERNAME,
@@ -54,11 +57,11 @@ def get_previous(location, html_file):
                 if post_id not in existing_ids:
                     existing_ids.append(post_id)
             posts = re.findall(
-                r'(<div class="post"[\S\n\t\v ]+?<!--postend--><\/div>)',
+                r'(<div class="post"[\S\n\t\v ]+?<!--postend--></div>)',
                 current_html
             )
             comments = re.findall(
-                r'(<div class="comment"[\S\n\t\v ]+?<!--commentend--><\/div>)',
+                r'(<div class="comment"[\S\n\t\v ]+?<!--commentend--></div>)',
                 current_html
             )
             for post in posts:
@@ -137,121 +140,225 @@ def get_post_html(post):
 
 def save_media(post, location):
     """Takes a post object and tries to download any image/video it might be
-    associated with. If it can, it will return the filename."""
+    associated with. If it can, it will return the filename(s).
+    Service/domain handlers should return -1 on error to indicate upstream that
+    it tried and failed to fetch the media, so that we have the option of
+    how to handle it in the upstream HTML rendering.
+    """
 
     url = post.url
     stripped_url = url.split("?")[0]
-    if url.endswith(post.permalink): return None
 
-    # What is the key information?
+    if url.endswith(post.permalink):
+        return None
+
+    # Extract key information
     extension = stripped_url.split(".")[-1].lower()
     domain = ".".join(post.url.split("/")[2].split(".")[-2:])
     readable_name = list(filter(bool, post.permalink.split("/")))[-1]
 
-    # If it's an imgur gallery, forget it
-    if domain == "imgur.com" and "gallery" in url: return None
+    # Route to appropriate handler
+    # Dead.
+    if domain == "gfycat.com":
+        return -1
 
-    # Can the media be obtained directly?
+    # Too hard to handle, I guess?
+    if domain == "imgur.com" and "gallery" in url:
+        return -1
+
+    # Might be directly fetchable via curl and the like.
     if extension in IMAGE_EXTENSIONS + VIDEO_EXTENSIONS:
-        filename = f"{readable_name}_{post.id}.{extension}"
-        try:
-            response = requests.get(post.url)
-        except:
-            return
-        media_type = response.headers.get("Content-Type", "")
-        if media_type.startswith("image") or media_type.startswith("video"):
-            with open(os.path.join(location, "media", filename), "wb") as f:
-                f.write(response.content)
-                return filename
+        return _handle_direct_media(url, post.id, readable_name, extension, location)
 
-    # Is this a reddit gallery?
     if domain == "reddit.com" and "gallery" in url:
-        json_url = url + ".json"
+        return _handle_reddit_gallery(url, post.id, readable_name, location)
+
+    if domain == "redd.it":
+        return _handle_vreddit(url, post.id, readable_name, location)
+
+    if domain == "imgur.com" and extension != "gifv":
+        return _handle_imgur(url, post.id, readable_name, location)
+
+    # Things that yt-dlp can handle, I guess.
+    if domain in PLATFORMS:
+        return _handle_ytdlp(url, post.id, readable_name, location)
+
+    # Special case of direct for reddituploads.com
+    if domain == "reddituploads.com":
+        if not hasattr(post, "preview"):
+            return -1
+        url = post.preview['images'][0]['source']['url']
+        extension = url.split("?")[0].split(".")[-1]
+        return _handle_direct_media(url, post.id, readable_name, extension, location)
+
+    return None
+
+
+def _handle_direct_media(url, post_id, readable_name, extension, location):
+    """Download media that can be obtained directly from URL."""
+    filename = f"{readable_name}_{post_id}.{extension}"
+    try:
+        response = requests.get(url)
+        if response.status_code // 100 == 2:
+            media_type = response.headers.get("Content-Type", "")
+            if media_type.startswith("image") or media_type.startswith("video"):
+                filepath = os.path.join(location, "media", filename)
+                with open(filepath, "wb") as f:
+                    f.write(response.content)
+                return filename
+    except Exception as e:
+        logger.error(f"(direct media) Error downloading {url}: {e}")
+
+    return -1
+
+
+def _handle_reddituploads(url, post_id, readable_name, extension, location):
+    """Download media that can be obtained directly from URL."""
+    filename = f"{readable_name}_{post_id}.{extension}"
+    try:
+        response = requests.get(url)
+        if response.status_code // 100 == 2:
+            media_type = response.headers.get("Content-Type", "")
+            if media_type.startswith("image") or media_type.startswith("video"):
+                filepath = os.path.join(location, "media", filename)
+                with open(filepath, "wb") as f:
+                    f.write(response.content)
+                return filename
+    except Exception as e:
+        logger.error(f"(reddituploads) Error downloading {url}: {e}")
+
+    return -1
+
+
+def _handle_reddit_gallery(url, post_id, readable_name, location):
+    """Download all images from a Reddit gallery post."""
+    json_url = url + ".json"
+    resp = requests.get(json_url)
+
+    # Handle rate limiting
+    sleep = 1
+    while resp.status_code == 429:
+        time.sleep(sleep)
+        logger.warning(f"Rate limited, sleeping for {sleep} seconds")
         resp = requests.get(json_url)
+        sleep *= 2
 
-        sleep = 1
-        while resp.status_code == 429:
-            time.sleep(sleep)
-            print(f"Rate limited, sleeping for {sleep} seconds")
-            resp = requests.get(json_url)
-            sleep *= 2
+    data = resp.json()
+    post_data = data[0]["data"]["children"][0]["data"]
+    media = post_data.get("media_metadata")
 
-        data = resp.json()
-        post_data = data[0]["data"]["children"][0]["data"]
-        media = post_data.get("media_metadata")
-        if not media:
-            return None
-        filenames = []
-        for idx, data in enumerate(list(media.values()), 1):
-            if "m" not in data: continue
-            ext = data["m"].split("/")[-1]
-            if "u" in data["s"]:
-                base_url = data["s"]["u"].replace("&amp;", "&")  # unescape URL
-            else:
-                continue
+    if not media:
+        return None
+
+    filenames = []
+    for idx, data in enumerate(list(media.values()), 1):
+        if "m" not in data:
+            continue
+
+        ext = data["m"].split("/")[-1]
+
+        if "u" not in data["s"]:
+            continue
+
+        base_url = data["s"]["u"].replace("&amp;", "&")
+
+        try:
             response = requests.get(base_url)
             if response.status_code == 200:
-                filename = f"{readable_name}_{post.id}_{idx}.{ext}"
-                with open(os.path.join(location, "media", filename), "wb") as f:
+                filename = f"{readable_name}_{post_id}_{idx}.{ext}"
+                filepath = os.path.join(location, "media", filename)
+                with open(filepath, "wb") as f:
                     f.write(response.content)
-                    filenames.append(filename)
-        return filenames if filenames else None
+                filenames.append(filename)
+        except Exception as e:
+            logger.error(f"(reddit gallery) Error downloading {base_url}: {e}")
+            return -1
 
-    # Is this a v.redd.it link?
-    if domain == "redd.it":
-        downloader = Downloader(max_q=True, log=False)
-        downloader.url = url
-        current = os.getcwd()
+    return filenames if filenames else None
+
+
+def _handle_vreddit(url, post_id, readable_name, location):
+    """Download video from v.redd.it using Downloader."""
+    downloader = Downloader(max_q=True, log=False)
+    downloader.url = url
+    current = os.getcwd()
+
+    try:
+        name = downloader.download()
+        extension = name.split(".")[-1]
+        filename = f"{readable_name}_{post_id}.{extension}"
+        filepath = os.path.join(location, "media", filename)
+        os.rename(name, filepath)
+        return filename
+    except Exception as e:
+        logger.error(f"(vreddit) Error downloading {url}: {e}")
+        return -1
+    finally:
+        os.chdir(current)
+
+
+def _handle_imgur(url, post_id, readable_name, location):
+    """Download image from imgur by trying different extensions."""
+    base_url = f'https://i.{url[url.find("//") + 2:]}'
+    base_url = base_url.replace("i.imgur.com", "imgur.com")
+    base_url = base_url.replace("m.imgur.com", "imgur.com")
+
+    for i, extension in enumerate(IMAGE_EXTENSIONS):
+        direct_url = f"{base_url}.{extension}"
+
         try:
-            name = downloader.download()
-            extension = name.split(".")[-1]
-            filename = f"{readable_name}_{post.id}.{extension}"
-            os.rename(name, os.path.join(location, "media", filename))
-            return filename
-        except:
-            os.chdir(current)
-            return None
-
-    # Is this an imgur image?
-    if domain == "imgur.com" and extension != "gifv":
-        for extension in IMAGE_EXTENSIONS:
-            direct_url = f'https://i.{url[url.find("//") + 2:]}.{extension}'
-            direct_url = direct_url.replace("i.imgur.com", "imgur.com")
-            direct_url = direct_url.replace("m.imgur.com", "imgur.com")
-            try:
-                response = requests.get(direct_url)
-            except:
-                continue
-            if response.status_code == 200:
-                filename = f"{readable_name}_{post.id}.{extension}"
-                with open(os.path.join(location, "media", filename), "wb") as f:
+            response = requests.get(direct_url)
+            if response.status_code // 100 == 2:
+                filename = f"{readable_name}_{post_id}.{extension}"
+                filepath = os.path.join(location, "media", filename)
+                with open(filepath, "wb") as f:
                     f.write(response.content)
-                    return filename
+                return filename
+        except Exception as e:
+            continue
+    logger.error(f"(imgur) Error downloading {base_url}")
+    return -1
 
-    # Try to use youtube_dl if it's one of the possible domains
-    if domain in PLATFORMS:
-        options = {
-            "nocheckcertificate": True, "quiet": True, "no_warnings": True,
-            "ignoreerrors": True, "no-progress": True,
-            "outtmpl": os.path.join(
-                location, "media", f"{readable_name}_{post.id}" + ".%(ext)s"
-            )
-        }
-        current = os.getcwd()
+
+def _handle_ytdlp(url, post_id, readable_name, location):
+    """Download media using yt-dlp for supported platforms."""
+    options = {
+        "nocheckcertificate": True,
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreerrors": False,  # I think this was keeping us from getting the exception
+        "no-progress": True,
+        "outtmpl": os.path.join(
+            location, "media", f"{readable_name}_{post_id}" + ".%(ext)s"
+        )
+    }
+
+    current = os.getcwd()
+
+    try:
         with yt_dlp.YoutubeDL(options) as ydl:
-            try:
-                ydl.download([url])
-            except:
-                os.chdir(current)
-                return
-        for f in os.listdir(os.path.join(location, "media")):
-            if f.startswith(f"{readable_name}_{post.id}"):
-                return f
+            ydl.download([url])
+    except Exception as e:
+        logger.error(f"(ytdlp) Error downloading {url}: {e}")
+        return -1
+    finally:
+        os.chdir(current)
+
+    # Find the downloaded file
+    media_dir = os.path.join(location, "media")
+    for f in os.listdir(media_dir):
+        if f.startswith(f"{readable_name}_{post_id}"):
+            return f
+
+    return None
 
 
 def add_media_preview_to_html(post_html, media):
     """Takes post HTML and returns a modified version with the preview
     inserted."""
+    if not isinstance(media, list):
+        media = [media]
+
     if len(media) == 1:
         media = media[0]
         extension = media.split(".")[-1]
@@ -274,10 +381,9 @@ def add_media_preview_to_html(post_html, media):
             if extension in IMAGE_EXTENSIONS:
                 gallery += f'<figure><img src="{location}"><figcaption>Image {i + 1} of {len(media)}</figcaption></figure><br/><br/>'
             elif extension in VIDEO_EXTENSIONS:
-                gallery +=f'<video controls><source src="{location}"></video><br/>{i + 1} of {len(media)}<br/><br/>'
-        post_html = post_html.replace("<!--preview-->",gallery)
-        return post_html
-
+                gallery += f'<video controls><source src="{location}"></video><br/>{i + 1} of {len(media)}<br/><br/>'
+        post_html = post_html.replace("<!--preview-->", gallery)
+    return post_html
 
 
 def create_post_page_html(post, post_html):
@@ -292,6 +398,8 @@ def create_post_page_html(post, post_html):
         '<source src="media/', '<source src="../media/'
     ))
     html = re.sub(r'<a href="posts(.+?)</a>', "", html)
+
+    # noinspection DuplicatedCode
     with open(os.path.join("html", "style.css"), encoding="utf-8") as f:
         html = html.replace("<style></style>", f"<style>\n{f.read()}\n</style>")
     with open(os.path.join("html", "main.js"), encoding="utf-8") as f:
@@ -343,6 +451,8 @@ def save_html(posts, comments, location, html_file, page, has_next, username=Non
     else:
         with open(os.path.join("html", html_file), encoding="utf-8") as f:
             html = f.read()
+
+    # noinspection DuplicatedCode
     with open(os.path.join("html", "style.css"), encoding="utf-8") as f:
         html = html.replace("<style></style>", f"<style>\n{f.read()}\n</style>")
     with open(os.path.join("html", "main.js"), encoding="utf-8") as f:
