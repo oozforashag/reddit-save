@@ -294,6 +294,7 @@ def _handle_vreddit(url, post_id, readable_name, location):
         logger.error(f"(vreddit) Error downloading {url}: {e}")
         return -1
     finally:
+        # TODO What is this for?  Does the downloader change directory on us?
         os.chdir(current)
 
 

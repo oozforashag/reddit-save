@@ -6,6 +6,7 @@ import sys
 from tqdm import tqdm
 from utilities import *
 from colorlogger import logger
+from pathlib import Path
 
 
 def validate_mode(mode: str) -> str:
@@ -17,26 +18,35 @@ def validate_mode(mode: str) -> str:
     raise argparse.ArgumentTypeError(f"Invalid mode: {mode}")
 
 
-def parse_arguments() -> tuple[str, str, int]:
+def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Save reddit posts to file.")
-    parser.add_argument("mode", type=validate_mode, nargs=1,
+    parser.add_argument("--mode", type=validate_mode, required=True,
                         help="Mode: 'saved', 'upvoted', or 'user:USERNAME'")
-
-    if os.getenv("DOCKER", "0") != "1":
-        parser.add_argument("location", type=str, nargs=1,
-                            help="The path to save to.")
-
-    parser.add_argument("--page-size", type=int, nargs=1, default=[0],
+    parser.add_argument("--location", type=str,
+                        help="The path to save to (default: ./archive/ in Docker)")
+    parser.add_argument("--page-size", type=int, default=0,
                         help="The number of posts to save per page.")
+    parser.add_argument("--blacklist", type=str,
+                        help="Path to blacklist file containing post IDs to skip")
 
     args = parser.parse_args()
-    mode = args.mode[0]
-    page_size = args.page_size[0]
-    location = "./archive/" if os.getenv("DOCKER", "0") == "1" else args.location[0]
 
-    assert os.path.isdir(location), f"{location} is not a directory!"
-    return mode, location, page_size
+    # Set location based on environment
+    if os.getenv("DOCKER", "0") == "1":
+        args.location = "./archive/"
+    else:
+        if not args.location:
+            parser.error("--location is required when not running in Docker")
+
+    assert os.path.isdir(args.location), f"{args.location} is not a directory!"
+
+    # Validate blacklist file if provided
+    if args.blacklist and not os.path.isfile(args.blacklist):
+        logger.info(f"Creating blacklist file: {args.blacklist}")
+        Path(args.blacklist).touch()
+
+    return args
 
 
 def configure_mode(mode: str):
@@ -69,15 +79,24 @@ def ensure_directories(location: str):
     os.makedirs(os.path.join(location, "posts"), exist_ok=True)
 
 
-def process_posts(posts, location: str, existing_posts_html: list) -> list:
+def process_posts(posts, location: str, existing_posts_html: list, blacklist_file: str = None) -> list:
     """Process posts, download media, and generate HTML."""
     posts_html = []
+
+    blacklisted_ids = set()
+    if blacklist_file and os.path.exists(blacklist_file):
+        with open(blacklist_file, "r") as f:
+            blacklisted_ids = {line.strip() for line in f if line.strip()}
+        logger.info(f"Ignoring {len(blacklisted_ids)} blacklisted posts.")
 
     if not posts:
         logger.info("No new posts to process!")
         return existing_posts_html
 
     for post in posts:
+        if post.id in blacklisted_ids:
+            continue
+
         post_html = get_post_html(post)
         media = save_media(post, location)
 
@@ -87,6 +106,7 @@ def process_posts(posts, location: str, existing_posts_html: list) -> list:
         #  and add it to the HTML.
         if media == -1:
             logger.error(f'Skipping post {post.id}, which contained unfetchable media: "{post.title}"')
+            blacklisted_ids.add(post.id)
             continue
         elif media:
             post_html = add_media_preview_to_html(post_html, media)
@@ -98,6 +118,11 @@ def process_posts(posts, location: str, existing_posts_html: list) -> list:
         post_file = os.path.join(location, "posts", f"{post.id}.html")
         with open(post_file, "w", encoding="utf-8") as f:
             f.write(page_html)
+
+    if blacklist_file:
+        logger.info("Updating blacklist.")
+        with open(blacklist_file, "w") as f:
+            f.writelines(f"{x}\n" for x in sorted(blacklisted_ids))
 
     return posts_html + existing_posts_html
 
@@ -142,7 +167,11 @@ def save_paginated_html(posts_html: list, comments_html: list, location: str,
 
 def main():
     """Main entry point for the Reddit archiver."""
-    mode, location, page_size = parse_arguments()
+    clas = parse_arguments()
+    mode = clas.mode
+    location = clas.location
+    page_size = clas.page_size
+    blacklist_file = clas.blacklist
 
     # Configure based on mode
     client = make_client()
@@ -152,11 +181,11 @@ def main():
     ensure_directories(location)
 
     # Load existing content
-    logger.info("Getting previously saved posts and comments...")
+    logger.info(f"Getting previously {mode} posts and comments...")
     existing_ids, existing_posts_html, existing_comments_html = get_previous(location, html_file)
 
-    # Get new posts and comments
-    new_posts = sorted([p for p in get_posts(client) if p.id not in existing_ids], key=lambda p: p.id)
+    # Get new posts and comments.  Skip blacklisted posts.
+    new_posts = sorted([p for p in get_posts(client) if p.id not in existing_ids],key=lambda p: p.id)
     new_comments = sorted([c for c in get_comments(client) if c.id not in existing_ids], key=lambda c: c.id)
 
     # Make one message showing the number of new and existing posts/comments.
@@ -165,7 +194,7 @@ def main():
     logger.info(msg)
 
     # Process everything
-    posts_html = process_posts(new_posts, location, existing_posts_html)
+    posts_html = process_posts(new_posts, location, existing_posts_html, blacklist_file=blacklist_file)
     comments_html = process_comments(new_comments, existing_comments_html)
 
     # Save HTML
