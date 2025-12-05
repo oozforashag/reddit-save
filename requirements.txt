@@ -1,6 +1,9 @@
-praw
-requests
+praw~=7.8.1
+requests~=2.32.5
 youtube_dl
-yt-dlp
-tqdm
-redvid
+yt-dlp~=2025.11.12
+tqdm~=4.67.1
+redvid~=2.0.6
+
+bs4~=0.0.2
+beautifulsoup4~=4.12.3

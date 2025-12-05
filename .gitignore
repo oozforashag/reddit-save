@@ -7,3 +7,4 @@ secrets1.py
 secrets2.py
 /logindata.py
 logindata.py
+*.bak
