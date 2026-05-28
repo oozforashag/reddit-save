@@ -243,6 +243,10 @@ def _handle_reddit_gallery(url, post_id, readable_name, location):
         resp = requests.get(json_url)
         sleep *= 2
 
+    if resp.status_code // 100 != 2:
+        logger.error(f"(reddit gallery) HTTP {resp.status_code} for {json_url}")
+        return -1
+
     data = resp.json()
     post_data = data[0]["data"]["children"][0]["data"]
     media = post_data.get("media_metadata")

@@ -1,0 +1,16 @@
+[project]
+name = "reddit-save"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "praw>=7.8.1",
+    "requests>=2.32.5",
+    "yt-dlp>=2025.11.12",
+    "tqdm>=4.67.1",
+    "redvid>=2.0.6",
+    "beautifulsoup4>=4.12.3",
+    "gallery-dl>=1.32.1",
+]
+
+[project.scripts]
+reddit-save = "save:main"

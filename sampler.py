@@ -2,7 +2,7 @@ import random
 from bs4 import BeautifulSoup
 
 
-def sample_posts(save_root, sample_size=200):
+def sample_posts(save_root, sample_size=100):
     """ Write a random selection of posts from the saved and upvoted posts to a new HTML file. """
     # Read the original HTML file
     with open(fr"{save_root}\_updoot\upvoted.html", 'r', encoding='utf-8') as file:
