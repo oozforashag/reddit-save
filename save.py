@@ -97,18 +97,17 @@ def process_posts(posts, location: str, existing_posts_html: list, blacklist_fil
         if post.id in blacklisted_ids:
             continue
 
-        post_html = get_post_html(post)
-        media = save_media(post, location)
-
-        # If media is -1, that's because the fetch failed.  The post shouldn't be added to the HTML
-        #  because it won't look like the author intended; warn and skip.
-        #  If it's truthy but not -1, then we'll assume that the media was successfully downloaded
-        #  and add it to the HTML.
-        if media == -1:
-            logger.error(f'Skipping post {post.id}, which contained unfetchable media: "{post.title}"')
+        try:
+            post_html = get_post_html(post)
+            media = save_media(post, location)
+            if media == -1:
+                raise ValueError("unfetchable media")
+        except Exception as e:
+            logger.error(f'Skipping post [{post.id}] "{post.title}": {e}')
             blacklisted_ids.add(post.id)
             continue
-        elif media:
+
+        if media:
             post_html = add_media_preview_to_html(post_html, media)
 
         posts_html.append(post_html)

@@ -171,7 +171,7 @@ def save_media(post, location):
         return _handle_direct_media(url, post.id, readable_name, extension, location)
 
     if domain == "reddit.com" and "gallery" in url:
-        return _handle_reddit_gallery(url, post.id, readable_name, location)
+        return _handle_reddit_gallery(post, location)
 
     if domain == "redd.it":
         return _handle_vreddit(url, post.id, readable_name, location)
@@ -230,52 +230,58 @@ def _handle_reddituploads(url, post_id, readable_name, extension, location):
     return -1
 
 
-def _handle_reddit_gallery(url, post_id, readable_name, location):
+
+def _extract_gallery(submission):
+    """ Modified from gallery-dl's. """
+    if not hasattr(submission, "gallery_data"):
+        logger.error("gallery %s: missing 'gallery_data'",)
+        return
+
+    gallery = submission.gallery_data
+    if gallery is None:
+        logger.warning("gallery %s: deleted", submission["id"])
+        return
+
+    meta = submission.media_metadata
+    if meta is None:
+        logger.warning("gallery %s: missing 'media_metadata'",
+                         submission["id"])
+        return
+
+    for item in gallery["items"]:
+        data = meta[item["media_id"]]
+        if data["status"] != "valid" or "s" not in data:
+            logger.warning(
+                "gallery %s: skipping item %s (status: %s)",
+                submission["id"], item["media_id"], data.get("status"))
+            continue
+        src = data["s"]
+        if url := src.get("u") or src.get("gif") or src.get("mp4"):
+            yield url.partition("?")[0].replace("/preview.", "/i.", 1)
+        else:
+            logger.error(
+                "gallery %s: unable to fetch download URL for item %s",
+                submission["id"], item["media_id"])
+            logger.debug(src)
+
+
+def _handle_reddit_gallery(post, location):
     """Download all images from a Reddit gallery post."""
-    json_url = url + ".json"
-    resp = requests.get(json_url)
-
-    # Handle rate limiting
-    sleep = 1
-    while resp.status_code == 429:
-        time.sleep(sleep)
-        logger.warning(f"Rate limited, sleeping for {sleep} seconds")
-        resp = requests.get(json_url)
-        sleep *= 2
-
-    if resp.status_code // 100 != 2:
-        logger.error(f"(reddit gallery) HTTP {resp.status_code} for {json_url}")
-        return -1
-
-    data = resp.json()
-    post_data = data[0]["data"]["children"][0]["data"]
-    media = post_data.get("media_metadata")
-
-    if not media:
-        return None
+    readable_name = list(filter(bool, post.permalink.split("/")))[-1]
 
     filenames = []
-    for idx, data in enumerate(list(media.values()), 1):
-        if "m" not in data:
-            continue
-
-        ext = data["m"].split("/")[-1]
-
-        if "u" not in data["s"]:
-            continue
-
-        base_url = data["s"]["u"].replace("&amp;", "&")
-
+    for idx, image_url in enumerate(_extract_gallery(post)):
         try:
-            response = requests.get(base_url)
+            response = requests.get(image_url)
             if response.status_code == 200:
-                filename = f"{readable_name}_{post_id}_{idx}.{ext}"
+                ext = os.path.splitext(image_url)[1]
+                filename = f"{readable_name}_{post.id}_{idx}{ext}"
                 filepath = os.path.join(location, "media", filename)
                 with open(filepath, "wb") as f:
                     f.write(response.content)
                 filenames.append(filename)
         except Exception as e:
-            logger.error(f"(reddit gallery) Error downloading {base_url}: {e}")
+            logger.error(f"(reddit gallery) Error downloading {image_url}: {e}")
             return -1
 
     return filenames if filenames else None
@@ -283,22 +289,21 @@ def _handle_reddit_gallery(url, post_id, readable_name, location):
 
 def _handle_vreddit(url, post_id, readable_name, location):
     """Download video from v.redd.it using Downloader."""
-    downloader = Downloader(max_q=True, log=False)
-    downloader.url = url
     current = os.getcwd()
 
     try:
+        downloader = Downloader(max_q=True, log=False)
+        downloader.url = url
         name = downloader.download()
         extension = name.split(".")[-1]
         filename = f"{readable_name}_{post_id}.{extension}"
         filepath = os.path.join(location, "media", filename)
         os.rename(name, filepath)
         return filename
-    except Exception as e:
+    except BaseException as e:
         logger.error(f"(vreddit) Error downloading {url}: {e}")
         return -1
     finally:
-        # TODO What is this for?  Does the downloader change directory on us?
         os.chdir(current)
 
 
