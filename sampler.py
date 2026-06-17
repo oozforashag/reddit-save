@@ -1,5 +1,57 @@
 import random
+from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
+
+
+def take_recent(save_root, n_days=30):
+    """ Write posts created within the last n_days to a new HTML file. """
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=n_days)
+
+    with open(fr"{save_root}\_updoot\upvoted.html", 'r', encoding='utf-8') as file:
+        updt_content = file.read()
+
+    with open(fr"{save_root}\_save\saved.html", 'r', encoding='utf-8') as file:
+        save_content = file.read()
+
+    soup_up = BeautifulSoup(updt_content, 'html.parser')
+    for img in soup_up.find_all('img'):
+        img['src'] = '_updoot/' + img['src']
+    for source in soup_up.find_all('source'):
+        source['src'] = '_updoot/' + source['src']
+
+    soup_sv = BeautifulSoup(save_content, 'html.parser')
+    for img in soup_sv.find_all('img'):
+        img['src'] = '_save/' + img['src']
+    for source in soup_sv.find_all('source'):
+        source['src'] = '_save/' + source['src']
+
+    def filter_recent(posts):
+        result = []
+        for p in posts:
+            time_tag = p.find('time')
+            if not time_tag:
+                continue
+            try:
+                post_dt = datetime.fromisoformat(time_tag['title'])
+                if post_dt.tzinfo is None:
+                    post_dt = post_dt.replace(tzinfo=timezone.utc)
+                if post_dt >= cutoff:
+                    result.append(p)
+            except (KeyError, ValueError):
+                pass
+        return result
+
+    recent = filter_recent(soup_up.find_all('div', class_='post'))
+    recent += filter_recent(soup_sv.find_all('div', class_='post'))
+    recent.sort(key=lambda p: p.find('time')['title'], reverse=True)
+
+    new_soup = BeautifulSoup('<html><head></head><body></body></html>', 'html.parser')
+    new_soup.head.extend(soup_up.head.contents)
+    for post in recent:
+        new_soup.body.append(post)
+
+    with open(fr"{save_root}\__recent.html", 'w', encoding='utf-8') as file:
+        file.write(str(new_soup))
 
 
 def sample_posts(save_root, sample_size=100):
@@ -57,3 +109,4 @@ def sample_posts(save_root, sample_size=100):
 
 
 sample_posts(save_root=r"S:\foo\reddit-save")
+take_recent(save_root=r"S:\foo\reddit-save", n_days=30)
